@@ -1,0 +1,22 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      DATABASE_URL: /app/data/nexus.db
+      CHROMA_PATH: /app/data/chroma
+      KNOWLEDGE_BASE_PATH: /app/knowledge_base
+      FRONTEND_ORIGINS: http://localhost:3000
+    volumes:
+      - nexus-data:/app/data
+    ports: ["8000:8000"]
+  frontend:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on: [backend]
+    ports: ["3000:3000"]
+volumes:
+  nexus-data:

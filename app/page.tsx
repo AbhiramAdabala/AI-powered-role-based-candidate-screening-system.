@@ -1,72 +1,50 @@
 "use client";
 
-import { ChangeEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useRef, useState } from "react";
 
 type Role = "AI / ML Engineer" | "Backend Engineer" | "Data Scientist";
-type Question = { topic: string; prompt: string; source: string };
-
-const questionBank: Record<Role, Question[]> = {
-  "AI / ML Engineer": [
-    { topic: "Model generalization", prompt: "Your resume suggests hands-on model work. A training run achieves 96% accuracy but drops to 71% on validation data. How would you diagnose the gap, and what would you try first?", source: "Machine Learning — Tom Mitchell · Model evaluation" },
-    { topic: "Retrieval systems", prompt: "Design a retrieval pipeline for technical documents. How would you choose chunk size, embeddings, and the number of passages to retrieve?", source: "Role corpus · Context preservation & retrieval" },
-    { topic: "Production ML", prompt: "A model's input distribution shifts after launch. Which signals would you monitor, and how would you decide whether to retrain?", source: "Applied ML corpus · Distribution shift" },
-  ],
-  "Backend Engineer": [
-    { topic: "System design", prompt: "Design an interview-session API that remains consistent if a client retries the same answer submission. Where does idempotency live?", source: "Backend corpus · Reliable distributed systems" },
-    { topic: "Data modeling", prompt: "How would you model sessions, questions, and answers so each generated question remains traceable to its source context?", source: "Backend corpus · Relational data modeling" },
-    { topic: "Scaling", prompt: "Question generation becomes the slowest stage. How would you isolate it without making the candidate experience feel stalled?", source: "Backend corpus · Asynchronous processing" },
-  ],
-  "Data Scientist": [
-    { topic: "Experiment design", prompt: "A product team reports a conversion lift after launching a recommendation model. How would you test whether the model actually caused it?", source: "Applied ML corpus · Experimental design" },
-    { topic: "Feature quality", prompt: "A high-signal feature is missing for 35% of users. How would you investigate and decide whether to keep it?", source: "Data science corpus · Missing data" },
-    { topic: "Communication", prompt: "Your model improves recall but reduces precision. How would you frame the tradeoff for a non-technical stakeholder?", source: "Applied ML corpus · Evaluation metrics" },
-  ],
-};
+type Source = { chunk_id:string; source:string; excerpt:string; relevance:number };
+type Question = { id:string; ordinal:number; prompt:string; topic:string; difficulty:string; sources:Source[] };
+type Report = { score:number; summary:string; strongest_area:string; depth:string; strengths:string[]; improvements:string[] };
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const roles:Role[] = ["AI / ML Engineer", "Backend Engineer", "Data Scientist"];
 
 export default function Home() {
-  const [stage, setStage] = useState<"setup" | "interview" | "report">("setup");
-  const [role, setRole] = useState<Role>("AI / ML Engineer");
-  const [file, setFile] = useState<File | null>(null);
-  const [profile, setProfile] = useState("");
-  const [index, setIndex] = useState(0);
-  const [answer, setAnswer] = useState("");
-  const [answers, setAnswers] = useState<string[]>([]);
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const questions = questionBank[role];
-  const skills = useMemo(() => profile.match(/python|pytorch|tensorflow|fastapi|react|sql|aws|docker|kubernetes|pandas/gi)?.slice(0, 4) ?? [role.split(" ")[0], "Problem solving", "Systems thinking"], [profile, role]);
+  const [stage,setStage]=useState<"setup"|"interview"|"report">("setup");
+  const [role,setRole]=useState<Role>("AI / ML Engineer");
+  const [file,setFile]=useState<File|null>(null);
+  const [sessionId,setSessionId]=useState("");
+  const [question,setQuestion]=useState<Question|null>(null);
+  const [skills,setSkills]=useState<string[]>([]);
+  const [answer,setAnswer]=useState("");
+  const [answered,setAnswered]=useState(0);
+  const [maxQuestions,setMaxQuestions]=useState(5);
+  const [report,setReport]=useState<Report|null>(null);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const inputRef=useRef<HTMLInputElement>(null);
 
-  function pickFile(event: ChangeEvent<HTMLInputElement>) { const chosen = event.target.files?.[0]; if (chosen) setFile(chosen); }
-  function start() { if (!file) inputRef.current?.click(); else setStage("interview"); }
-  async function submitAnswer() {
-    if (!answer.trim()) return;
-    const next = [...answers, answer.trim()]; setAnswers(next); setAnswer("");
-    if (index < questions.length - 1) setIndex(index + 1);
-    else {
-      setSaving(true);
-      try { await fetch("/api/sessions", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({ role, resumeName:file?.name, profile, answers:next, questions:questions.map(q => q.prompt) }) }); } catch { /* report still works if persistence is unavailable locally */ }
-      setSaving(false); setStage("report");
-    }
+  function pickFile(e:ChangeEvent<HTMLInputElement>){const chosen=e.target.files?.[0];if(chosen){setFile(chosen);setError("")}}
+  async function start(){
+    if(!file){inputRef.current?.click();return}
+    setBusy(true);setError("");
+    try{const form=new FormData();form.append("role",role);form.append("resume",file);const response=await fetch(`${API}/api/interviews/start`,{method:"POST",body:form});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not start interview");setSessionId(data.session_id);setQuestion(data.question);setSkills(data.skills);setMaxQuestions(data.max_questions);setStage("interview")}
+    catch(e){setError(e instanceof Error?e.message:"Could not reach the interview service")}
+    finally{setBusy(false)}
   }
-  function reset() { setStage("setup"); setIndex(0); setAnswer(""); setAnswers([]); }
+  async function submitAnswer(){
+    if(!answer.trim()||!question)return;setBusy(true);setError("");
+    try{const response=await fetch(`${API}/api/interviews/${sessionId}/answers`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({question_id:question.id,answer:answer.trim()})});const data=await response.json();if(!response.ok)throw new Error(data.detail||"Could not save answer");setAnswered(v=>v+1);setAnswer("");if(data.complete){setReport(data.report);setStage("report")}else setQuestion(data.question)}
+    catch(e){setError(e instanceof Error?e.message:"Could not submit answer")}
+    finally{setBusy(false)}
+  }
+  function reset(){setStage("setup");setSessionId("");setQuestion(null);setAnswer("");setAnswered(0);setReport(null);setError("")}
 
   return <main>
-    <nav className="nav"><button className="brand" onClick={reset} aria-label="Nexus home"><span className="brandMark">N</span><span>NEXUS</span></button><div className="navMeta"><span className="statusDot" /> {stage === "setup" ? "Interview workspace" : `${role} · Live session`}</div></nav>
-
-    {stage === "setup" && <>
-      <section className="hero"><div className="eyebrow"><span>01</span> Candidate setup</div><h1>Your experience.<br /><em>Our questions.</em></h1><p className="lede">A focused technical interview shaped around what you have built, what you know, and the role you want next.</p></section>
-      <section className="setupGrid">
-        <div className="uploadCard" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); const f=e.dataTransfer.files[0]; if(f)setFile(f)}}><div className="cardIndex">RESUME / 01</div><div className="uploadIcon">↗</div><h2>{file ? file.name : "Drop your resume here"}</h2><p>{file ? `${Math.max(1, Math.round(file.size/1024))} KB · Ready to parse` : "PDF or TXT · up to 10 MB"}</p><input ref={inputRef} hidden type="file" accept=".pdf,.txt" onChange={pickFile}/><button className="secondary" onClick={()=>inputRef.current?.click()}>{file ? "Replace file" : "Choose file"}</button><textarea className="profileInput" value={profile} onChange={e=>setProfile(e.target.value)} placeholder="Optional: paste a few skills or a short experience summary for sharper questions." aria-label="Experience summary" /></div>
-        <div className="rolePanel"><div className="cardIndex">TARGET ROLE / 02</div><h2>What are you interviewing for?</h2><div className="roleOptions">{(Object.keys(questionBank) as Role[]).map(item=><button key={item} className={role===item?"role active":"role"} onClick={()=>setRole(item)}><span>{item}</span><span>{role===item?"●":"○"}</span></button>)}</div><button className="primary" onClick={start}>{file ? "Build my interview" : "Add resume to continue"}<span>→</span></button><p className="privacy">Your resume is used only to tailor this interview.</p></div>
-      </section>
-    </>}
-
-    {stage === "interview" && <section className="interviewShell">
-      <aside className="sessionRail"><div><div className="cardIndex">LIVE INTERVIEW</div><h2>{role}</h2><p>{file?.name}</p></div><div className="skillBlock"><span>PROFILE SIGNALS</span><div>{skills.map((skill,i)=><b key={`${skill}-${i}`}>{skill}</b>)}</div></div><div className="progressList">{questions.map((q,i)=><div className={i===index?"progress active":i<index?"progress done":"progress"} key={q.topic}><span>{String(i+1).padStart(2,"0")}</span><p>{q.topic}</p></div>)}</div></aside>
-      <div className="questionStage"><div className="questionTop"><span>QUESTION {index+1} / {questions.length}</span><span className="level">{index===0?"FOUNDATION":index===1?"APPLIED":"SYSTEMS"}</span></div><h3>{questions[index].prompt}</h3><div className="sourceNote"><span>GROUNDING</span><p>{questions[index].source}</p></div><label htmlFor="answer">Your answer</label><textarea id="answer" autoFocus value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Think aloud. Explain your assumptions, tradeoffs, and next steps…" onKeyDown={e=>{if((e.metaKey||e.ctrlKey)&&e.key==="Enter")submitAnswer()}}/><div className="answerActions"><span>{answer.length} characters · Ctrl/⌘ + Enter to submit</span><button className="primary inline" disabled={!answer.trim()||saving} onClick={submitAnswer}>{index===questions.length-1?"Finish interview":"Submit & continue"}<span>→</span></button></div></div>
-    </section>}
-
-    {stage === "report" && <section className="reportShell"><div className="reportHero"><div><div className="eyebrow"><span>✓</span> Session complete</div><h1>Clear signal.<br/><em>Useful next steps.</em></h1></div><div className="score"><strong>{78 + Math.min(14, answers.join(" ").length % 15)}</strong><span>OVERALL SIGNAL</span></div></div><div className="reportGrid"><article className="summaryCard"><div className="cardIndex">INTERVIEW SUMMARY</div><h2>Strong applied reasoning with room to sharpen evaluation detail.</h2><p>You consistently framed the problem before proposing a solution and surfaced practical tradeoffs. Your strongest answers connected technical choices to system outcomes.</p><div className="metrics"><div><strong>3/3</strong><span>Answered</span></div><div><strong>{role.includes("AI")?"ML systems":"Architecture"}</strong><span>Strongest area</span></div><div><strong>Applied</strong><span>Depth reached</span></div></div></article><article className="insightsCard"><div className="cardIndex">SIGNALS</div><div className="insight positive"><span>01</span><div><b>Structured thinking</b><p>Clear assumptions and logical sequencing across answers.</p></div></div><div className="insight"><span>02</span><div><b>Go one level deeper</b><p>Add concrete metrics, failure modes, and validation plans.</p></div></div><div className="insight"><span>03</span><div><b>Recommended focus</b><p>Practice defending tradeoffs under changing constraints.</p></div></div></article></div><div className="reportActions"><button className="secondary" onClick={reset}>Start another interview</button><button className="primary inline" onClick={()=>window.print()}>Save report <span>↗</span></button></div></section>}
-    <footer><span>GROUNDED IN ROLE-SPECIFIC KNOWLEDGE</span><span>ADAPTIVE · TRACEABLE · FAIR</span></footer>
-  </main>;
+    <nav className="nav"><button className="brand" onClick={reset} aria-label="Nexus home"><span className="brandMark">N</span><span>NEXUS</span></button><div className="navMeta"><span className="statusDot" />{stage==="setup"?"RAG interview workspace":`${role} · Live session`}</div></nav>
+    {stage==="setup"&&<><section className="hero"><div className="eyebrow"><span>01</span>Candidate setup</div><h1>Your experience.<br/><em>Our questions.</em></h1><p className="lede">A grounded technical interview generated from your resume and a role-specific knowledge base—not a fixed questionnaire.</p></section><section className="setupGrid"><div className="uploadCard" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files[0];if(f)setFile(f)}}><div className="cardIndex">RESUME / 01</div><div className="uploadIcon">↗</div><h2>{file?file.name:"Drop your resume here"}</h2><p>{file?`${Math.max(1,Math.round(file.size/1024))} KB · Ready to parse`:"PDF or TXT · up to 10 MB"}</p><input ref={inputRef} hidden type="file" accept=".pdf,.txt" onChange={pickFile}/><button className="secondary" onClick={()=>inputRef.current?.click()}>{file?"Replace file":"Choose file"}</button><div className="pipeline"><span>PARSE</span><i>→</i><span>EMBED</span><i>→</i><span>RETRIEVE</span><i>→</i><span>GENERATE</span></div></div><div className="rolePanel"><div className="cardIndex">TARGET ROLE / 02</div><h2>What are you interviewing for?</h2><div className="roleOptions">{roles.map(item=><button key={item} className={role===item?"role active":"role"} onClick={()=>setRole(item)}><span>{item}</span><span>{role===item?"●":"○"}</span></button>)}</div>{error&&<p className="error" role="alert">{error}</p>}<button className="primary" disabled={busy} onClick={start}>{busy?"Building from retrieved context…":file?"Build my interview":"Add resume to continue"}<span>→</span></button><p className="privacy">Your resume is parsed securely and used to tailor retrieval.</p></div></section></>}
+    {stage==="interview"&&question&&<section className="interviewShell"><aside className="sessionRail"><div><div className="cardIndex">LIVE INTERVIEW</div><h2>{role}</h2><p>{file?.name}</p></div><div className="skillBlock"><span>EXTRACTED SIGNALS</span><div>{(skills.length?skills:["Profile parsed"]).map(skill=><b key={skill}>{skill}</b>)}</div></div><div className="progressList">{Array.from({length:maxQuestions},(_,i)=><div className={i===answered?"progress active":i<answered?"progress done":"progress"} key={i}><span>{String(i+1).padStart(2,"0")}</span><p>{i===answered?question.topic:i<answered?"Answered":"Adaptive follow-up"}</p></div>)}</div></aside><div className="questionStage"><div className="questionTop"><span>QUESTION {question.ordinal} / {maxQuestions}</span><span className="level">{question.difficulty.toUpperCase()}</span></div><h3>{question.prompt}</h3><details className="sourceNote"><summary>GROUNDING · {question.sources.length} RETRIEVED CHUNKS</summary>{question.sources.map(source=><div className="trace" key={source.chunk_id}><b>{source.source}</b><span>{Math.round(source.relevance*100)}% match</span><p>{source.excerpt}</p><code>{source.chunk_id}</code></div>)}</details><label htmlFor="answer">Your answer</label><textarea id="answer" autoFocus value={answer} onChange={e=>setAnswer(e.target.value)} placeholder="Think aloud. Explain assumptions, tradeoffs, validation, and failure modes…" onKeyDown={e=>{if((e.metaKey||e.ctrlKey)&&e.key==="Enter")submitAnswer()}}/>{error&&<p className="error" role="alert">{error}</p>}<div className="answerActions"><span>{answer.length} characters · Ctrl/⌘ + Enter</span><button className="primary inline" disabled={!answer.trim()||busy} onClick={submitAnswer}>{busy?"Retrieving next context…":question.ordinal===maxQuestions?"Finish interview":"Submit & adapt"}<span>→</span></button></div></div></section>}
+    {stage==="report"&&report&&<section className="reportShell"><div className="reportHero"><div><div className="eyebrow"><span>✓</span>Session complete</div><h1>Clear signal.<br/><em>Useful next steps.</em></h1></div><div className="score"><strong>{report.score}</strong><span>OVERALL SIGNAL</span></div></div><div className="reportGrid"><article className="summaryCard"><div className="cardIndex">INTERVIEW SUMMARY</div><h2>{report.summary}</h2><div className="metrics"><div><strong>{answered}/{maxQuestions}</strong><span>Answered</span></div><div><strong>{report.strongest_area}</strong><span>Strongest area</span></div><div><strong>{report.depth}</strong><span>Depth reached</span></div></div></article><article className="insightsCard"><div className="cardIndex">EVIDENCE-BASED SIGNALS</div>{report.strengths.map((item,i)=><div className="insight positive" key={item}><span>0{i+1}</span><div><b>{item}</b><p>Supported by the recorded interview transcript.</p></div></div>)}{report.improvements.map((item,i)=><div className="insight" key={item}><span>0{i+report.strengths.length+1}</span><div><b>{item}</b><p>Recommended focus for the next practice session.</p></div></div>)}</article></div><div className="reportActions"><button className="secondary" onClick={reset}>Start another interview</button><button className="primary inline" onClick={()=>window.print()}>Save report <span>↗</span></button></div></section>}
+    <footer><span>RESUME → QUERY → RETRIEVAL → QUESTION → ANSWER → STORAGE</span><span>ADAPTIVE · TRACEABLE · GROUNDED</span></footer>
+  </main>
 }

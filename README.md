@@ -1,54 +1,169 @@
-# Nexus — Adaptive Technical Interviews
+# Nexus — AI-Powered Role-Based Candidate Screening
 
-Nexus is a full-stack candidate screening experience based on the AI/ML & Backend Intern assignment. Candidates upload a resume, choose a target role, complete a grounded technical interview, and receive a structured report.
+Nexus is a complete resume-aware technical interview system. It parses a candidate resume, retrieves role-specific evidence from a vector database, generates grounded questions, adapts to prior answers, persists the full interview, and produces an evidence-based report.
 
-## Features
+## Assignment coverage
 
-- Resume upload and experience-signal extraction
-- AI/ML, backend, and data-science interview tracks
-- Role-specific questions grounded in curated knowledge topics
-- Continuous interview state and answer capture
-- Persistent sessions with Cloudflare D1
-- Structured results with strengths and recommended focus areas
-- Responsive interface and printable reports
-- Dynamic Open Graph sharing card
+- React/Vinext frontend with resume upload, role selection, interview, source trace, and results
+- Python FastAPI service with validation, service separation, and consistent errors
+- PDF and text resume parsing with skill and experience-signal extraction
+- Role-specific document ingestion with overlapping chunking
+- Sentence Transformer embeddings stored in persistent Chroma collections
+- Dynamic queries combining role, resume evidence, and the previous answer
+- OpenAI-generated questions grounded in retrieved chunks, with a no-key grounded fallback
+- Adaptive follow-ups and progressive difficulty
+- SQLite persistence for sessions, questions, answers, reports, and trace metadata
+- Source chunk IDs, excerpts, relevance scores, and book filenames attached to every question
+- Docker Compose for one-command local operation
+- Unit tests for resume processing and chunking
 
-## Requirements
+## Architecture
 
-- Node.js 22.13 or newer
-- npm 10 or newer
+```text
+Resume PDF/TXT
+    ↓
+FastAPI upload validation → resume parser → skills + summary
+    ↓                                      ↓
+dynamic retrieval query ← role + profile + previous answer
+    ↓
+Sentence Transformer → Chroma vector search → top evidence chunks
+    ↓
+grounded question generator → question + trace metadata
+    ↓
+React interview UI → candidate answer → SQLite session store
+    ↓
+adaptive follow-up or structured final report
+```
 
-## Run locally
+The backend is split into configuration, resume processing, persistence, RAG components, and interview orchestration. The frontend never calls the model or vector database directly.
+
+## Quick start with Docker
+
+Requirements: Docker Desktop and Docker Compose.
+
+```bash
+cp .env.example .env
+# Add OPENAI_API_KEY to .env for LLM-generated questions.
+docker compose up --build
+```
+
+Open:
+
+- Frontend: http://localhost:3000
+- API documentation: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
+
+The container ingests the included original foundation notes at startup. The vector index and interview database persist in the `nexus-data` volume.
+
+## Run without Docker
+
+Use Node.js 22.13+ and Python 3.11+.
+
+```bash
+# Backend
+cd backend
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+copy .env.example .env  # use cp on macOS/Linux
+python bootstrap.py
+uvicorn app.main:app --reload --port 8000
+```
+
+In a second terminal:
 
 ```bash
 npm install
+copy .env.example .env.local  # use cp on macOS/Linux
 npm run dev
 ```
 
-Open `http://localhost:3000` in your browser.
+## Use the prescribed books
 
-The local development environment simulates the `DB` binding declared in `.openai/hosting.json`. The sessions table is created automatically on the first completed interview.
-
-## Production build
+The assignment names books such as *Machine Learning* by Tom Mitchell, *The Hundred-Page Machine Learning Book*, and *Introduction to Machine Learning with Python*. Obtain the PDFs legally, place them under the matching folder in `backend/knowledge_base/`, and ingest them:
 
 ```bash
-npm run build
-npm start
+cd backend
+python ingest.py --role "AI / ML Engineer" --path knowledge_base/ai_ml
+python ingest.py --role "Backend Engineer" --path knowledge_base/backend
+python ingest.py --role "Data Scientist" --path knowledge_base/data_science
+```
+
+PDFs are intentionally not committed because redistribution rights vary. The included original notes make the complete pipeline runnable immediately.
+
+## API lifecycle
+
+### Start an interview
+
+`POST /api/interviews/start` as multipart form data:
+
+- `resume`: PDF or TXT, up to 10 MB
+- `role`: `AI / ML Engineer`, `Backend Engineer`, or `Data Scientist`
+- `candidate_name`: optional
+
+The response includes extracted skills, resume summary, the first generated question, and its retrieved source traces.
+
+### Submit an answer
+
+`POST /api/interviews/{session_id}/answers`
+
+```json
+{"question_id":"...","answer":"..."}
+```
+
+The service stores the answer and returns either an adaptive next question or the final report.
+
+### Retrieve the report
+
+`GET /api/interviews/{session_id}/report`
+
+Returns the report and complete traceable transcript.
+
+## Configuration
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | Enables LLM question and report generation | grounded fallback |
+| `OPENAI_MODEL` | OpenAI model | `gpt-4.1-mini` |
+| `DATABASE_URL` | SQLite file | `./data/nexus.db` |
+| `CHROMA_PATH` | Persistent vector store | `./data/chroma` |
+| `EMBEDDING_MODEL` | Sentence Transformer model | `all-MiniLM-L6-v2` |
+| `MAX_QUESTIONS` | Questions per interview | `5` |
+| `FRONTEND_ORIGINS` | Allowed CORS origins | `http://localhost:3000` |
+| `NEXT_PUBLIC_API_URL` | Browser-visible API URL | `http://localhost:8000` |
+
+## Tests and builds
+
+```bash
+cd backend && pytest -q
+cd .. && npm run build
 ```
 
 ## Project structure
 
-- `app/page.tsx` — candidate setup, interview, and report experience
-- `app/api/sessions/route.ts` — session persistence API
-- `app/globals.css` — responsive visual system
-- `db/schema.ts` — interview session schema
-- `drizzle/` — database migration
-- `worker/index.ts` — Cloudflare-compatible worker entry point
+```text
+app/                         React interview experience
+backend/app/main.py          FastAPI routes
+backend/app/service.py       Interview lifecycle orchestration
+backend/app/database.py      SQLite repository and schema
+backend/app/resume.py        Resume parsing and skill extraction
+backend/app/rag/             Chunking, embeddings, Chroma, generation
+backend/knowledge_base/      Role-specific source documents
+backend/tests/               Unit tests
+docker-compose.yml           Full local stack
+```
 
-## Architecture
+## Demo video checklist
 
-The client owns short-lived interview UI state. Completed sessions are sent to the API route, validated, and stored in D1. The question bank carries a traceable knowledge-source label for every prompt. The Cloudflare Worker-compatible build is produced by Vinext and Vite.
+Record a short video showing:
 
-## Notes
+1. `docker compose up --build`
+2. API health and the ingested role collections
+3. Resume upload and extracted skills
+4. A generated question and its retrieved source chunks
+5. An answer producing an adaptive follow-up
+6. Completion of the interview and final report
+7. SQLite records or the report endpoint proving persistence
 
-The included question engine is deterministic and works without an API key. To connect a live LLM/RAG service, replace the question-bank selection in `app/page.tsx` with a server-side generation route while preserving the existing question, source, and answer data model.
+The demo video itself must be recorded and submitted by the candidate; it is the only assignment deliverable that cannot be generated from source code alone.
